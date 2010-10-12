@@ -1,0 +1,177 @@
+#!/bin/sh
+
+PREFIX=/home/dn42dns
+WHOIS_DIR=${PREFIX}/whois
+UTILS_DIR=${PREFIX}/whois/utils
+WORK_DIR=${PREFIX}/work
+FWD_ZONE="${WORK_DIR}/dn42"
+REV_ZONE="${WORK_DIR}/22.172.in-addr.arpa"
+REV_ZONE_DEPOLY=${REV_ZONE}.deploy
+OLD_FWD_ZONE=${FWD_ZONE}.old
+OLD_REV_ZONE=${REV_ZONE}.old
+TMP_FWD_ZONE=${FWD_ZONE}.tmp
+TMP_REV_ZONE=${REV_ZONE}.tmp
+OLD_TMP_FWD_ZONE=${OLD_FWD_ZONE}.tmp
+
+# ENSURE THEIR IS A CHECKOUT BY ENTERING IT
+if ! cd ${WHOIS_DIR}
+then
+	echo -n "Failed to enter checkout dir"
+	echo    "(path = ${WHOIS_DIR})."
+	exit 1
+fi
+
+# PULL NEWEST VERSION
+if ! mtn pull >/dev/null 2>/dev/null
+then
+	echo -n "Montone pull failed"
+	echo    "(path = ${WHOIS_DIR})."
+	exit 1
+fi
+
+# UPDATE TO THE NEWEST VERSION
+if ! mtn up >/dev/null 2>/dev/null
+then
+	echo -n "Monotone update failed"
+	echo    "(path = ${WHOIS_DIR})."
+	exit 1
+fi
+
+# ENTER THE UTILS DIR
+if ! cd ${UTILS_DIR}
+then
+	echo -n "Failed to enter utils dir"
+	echo    "(path = ${UTILS_DIR})."
+	exit 1
+fi
+
+# ASSERT THAT RUBY IS INSTALLED
+if ! which ruby >/dev/null
+then
+	echo -n "No ruby installed."
+	echo    "Install ruby!"
+	exit 1
+fi
+
+# ENSURE WE HAVE A WORKING DIR
+if ! mkdir -p ${WORK_DIR}
+then
+	echo -n "Failed to create working dir"
+	echo    " at ${WORK_DIR}."
+fi
+
+# ENSURE THEIR IS A CURRENT ZONEFILE
+if ! touch ${FWD_ZONE}
+then
+	echo -n "Failed to touch zonefile \"dn42\""
+	echo    "in ${WORK_DIR}."
+fi
+
+# REDFINE THE CURRENT ZONEFILE AS THE OLD ONE
+if ! mv ${FWD_ZONE} ${OLD_FWD_ZONE}
+then
+	echo -n "Failed to move old zone \"dn42\""
+	echo -n "to \"dn42.old\""
+	echo    "in ${WORK_DIR}."
+	exit 1
+fi
+
+# CREATE OUR SELF A NEW ZONEFILE
+if ! ruby zonegen.rb >${FWD_ZONE}
+then
+	echo -n "Failed to generate zone \"dn42\""
+	echo    "in ${WORK_DIR}."
+	exit 1
+fi
+
+# COMPARE THEM FOR EQUALITY UP TO SERIAL
+if ! sed '4d' ${FWD_ZONE} >${TMP_FWD_ZONE}
+then
+	echo -n "Failed to remove serial from \"dn42\""
+	echo    "in ${WORK_DIR}."
+	exit 1
+fi
+
+if ! sed '4d' ${OLD_FWD_ZONE} >${OLD_TMP_FWD_ZONE}
+then
+	echo -n "Failed to remove serial from old \"dn42\""
+	echo    "in ${WORK_DIR}."
+	exit 1
+fi
+
+if ! cmp -s ${WORK_DIR}/dn42.tmp ${WORK_DIR}/dn42.old.tmp 
+then
+	# SOMETHING CHANGED. GO TELL BIND
+	echo "Updating \"dn42\" zone."
+	deploy fwd || exit 1
+	echo "Changes:"
+	diff ${OLD_FWD_ZONE} ${FWD_ZONE}
+fi
+
+# CLEAN UP 
+if ! rm ${FWD_TMP_ZONE} ${TMP_FWD_ZONE} ${OLD_TMP_FWD_ZONE} ${OLD_FWD_ZONE}
+then
+	echo "Failed to clean work dir of stale \"dn42\" copies."
+	exit 1
+fi
+
+# ENSURE THEIR IS A CURRENT REVERSE ZONEFILE
+if ! touch "${WORK_DIR}/22.172.in-addr.arpa"
+then
+	echo -n "Failed to touch reverse zonefile for \"172.22.0.0/16\""
+	echo    "in ${WORK_DIR}."
+	exit 1
+fi
+
+# REDEFINE THE CURRENT REVERSE ZONEFILE AS THE OLD ONE
+if ! mv ${REV_ZONE} ${OLD_REV_ZONE}
+then
+	echo -n "Failed to move old reverse zonefile for \"172.22.0.0/16\""
+	echo -n "to \"22.172.in-addr.arpa.old\""
+	echo    "in ${WORK_DIR}."
+	exit 1
+fi
+
+# GENERATE REVERSE DNS ZONEFILE
+if ! ruby ptrgen.rb "172.22.0.0/16" >${REV_ZONE}
+then
+	echo -n "Failed to generate reverse zonefile for \"172.22.0.0/16\""
+	echo    "in ${WORK_DIR}."
+	exit 1
+fi
+
+if ! cmp -s ${REV_ZONE} ${OLD_REV_ZONE}
+then
+        # SOMETHING CHANGED. GO TELL BIND
+	DATE=$(date -j -f "%a %b %d %T %Z %Y" "`date`" "+%s")
+	
+	echo '$ORIGIN .'							> ${TMP_REV_ZONE}
+	echo '$TTL 172800     ; 2 days'						>>${TMP_REV_ZONE}
+	echo '22.172.in-addr.arpa	IN SOA  ns0.dn42. root.niobe.dn42. ('	>>${TMP_REV_ZONE}
+        echo "			     ${DATE} ; serial"				>>${TMP_REV_ZONE}
+        echo '				  14400 ; refresh (4 hours)'		>>${TMP_REV_ZONE}
+        echo '				   3600 ; retry (1 hour)'		>>${TMP_REV_ZONE}
+        echo '				1209600 ; expire (2 weeks)'		>>${TMP_REV_ZONE}
+        echo '				 172800 ; minimum (2 days)'		>>${TMP_REV_ZONE}
+        echo '			)'						>>${TMP_REV_ZONE}
+	echo ''									>>${TMP_REV_ZONE}
+	echo '			NS	ns1.crest.dn42.'			>>${TMP_REV_ZONE}
+	echo ''									>>${TMP_REV_ZONE}
+	cat ${REV_ZONE}								>>${TMP_REV_ZONE}
+	
+	mv ${TMP_REV_ZONE} ${REV_ZONE_DEPOLY}
+        echo "Updating \"172.22.0.0/16\" zone."
+        deploy rev || exit 1
+        echo "Changes:"
+        diff ${OLD_REV_ZONE} ${REV_ZONE}
+fi
+
+# CLEAN UP
+rm -f ${REV_ZONE_DEPOLY}
+if ! rm ${OLD_REV_ZONE} 
+then
+        echo "Failed to clean work dir of stale \"172.22.0.0/16\" copies."
+        exit 1
+fi
+
+
