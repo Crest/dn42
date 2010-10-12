@@ -1,0 +1,51 @@
+#!/bin/sh
+
+# Platform: FreeBSD 8.1 tested, any recent version should work
+
+IF="${1}"
+
+# In case of empty $PATH
+IFCONFIG=/sbin/ifconfig
+AWK=/usr/bin/awk
+XARGS=/usr/bin/xargs
+
+# Be a nice script and follow sysexits(3)
+EX_USAGE=64
+EX_DATAERR=65
+EX_CONFIG=78
+
+if [ $# -eq 0 ]
+then
+	echo 'USAGE: dn42_up <if> ...' >&2
+	exit $EX_USAGE
+fi
+
+if ! ${IFCONFIG} "${IF}" 2>/dev/null >/dev/null
+then
+	echo "ERROR: Interface ${IF} doesn't exist." >&2
+	exit $EX_DATAERR
+fi
+
+. /etc/rc.subr
+. /etc/network.subr
+
+load_rc_config ipv6_ifconfig
+IPV6_IFCONFIG=`get_if_var "${IF}" ipv6_ifconfig_IF`
+
+if [ -z "${IPV6_IFCONFIG}" ]
+then
+	echo "ERROR: No IPv6 address configured on ${IF}." >&2
+	exit $EX_CONFIG
+fi
+
+# Remove link local addresses.
+# Dummynet can't deal with link local traffic. It gets dropped.
+${IFCONFIG} "${IF}" inet6 |
+	${AWK} "\$1 == \"inet6\" && \$2 ~ \"%${IF}$\" { print \$2 }" |
+	${XARGS} -J % ${IFCONFIG} "${IF}" inet6 % -alias
+
+if ! ${IFCONFIG} "${IF}" inet6 $IPV6_IFCONFIG
+then
+	echo "ERROR: Failed to set IPv6 address on ${IF}." >&2
+	exit $OS_ERR
+fi
