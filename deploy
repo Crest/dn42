@@ -1,0 +1,52 @@
+#!/usr/bin/env zsh
+
+FWD="dn42"
+REV="22.172.in-addr.arpa"
+SRC_PREFIX="/home/dn42dns/work"
+DST_PREFIX="/etc/namedb/master"
+SRC_FWD="${SRC_PREFIX}/${FWD}"
+SRC_REV="${SRC_PREFIX}/${REV}.deploy"
+DST_FWD="${DST_PREFIX}/${FWD}"
+DST_REV="${DST_PREFIX}/${REV}"
+KEY="${SRC_PREFIX}/rndc.key"
+
+if [ $EUID != 0 ]
+then
+	exec sudo ${0} ${*}
+fi
+
+case ${1} in
+	# Copy the forward DNS zone file and inform bind
+	fwd)	if ! cp ${SRC_FWD} ${DST_FWD} >/dev/null 2>/dev/null
+		then
+			echo "Failed to copy \"dn42\" zonefile"
+			echo "from \"${SRC_FWD}\""
+			echo "to   \"${DST_FWD}\""
+			exit 1
+		fi
+		if ! rndc -k ${KEY} reload ${FWD} >/dev/null 2>/dev/null
+		then
+			echo "BIND failed to reload the \"dn42\" zone."
+			exit 1
+		fi
+		;;
+
+	rev)	if ! cp ${SRC_REV} ${DST_REV} >/dev/null 2>/dev/null
+		then
+			echo "Failed to copy \"172.22.0.0/16\" reverse zone file"
+			echo "from \"${SRC_REV}\""
+			echo "to   \"${DST_REV}\""
+			exit 1
+		fi
+		if ! rndc -k ${KEY} reload ${REV} >/dev/null 2>/dev/null
+		then
+			echo "BIND failed to reload the \"172.22.0.0/16\" reverse zone."
+			exit 1
+		fi
+		;;
+
+	*)	echo "Deploy called with invalid parameter."
+		exit 1
+		;;
+esac
+exit 0
